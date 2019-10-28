@@ -18,6 +18,7 @@ from lutris.config import LutrisConfig
 from lutris.command import MonitoredCommand
 from lutris.gui import dialogs
 from lutris.util.timer import Timer
+from lutris.util.linux import LINUX_SYSTEM
 from lutris.discord import DiscordPresence
 from lutris.settings import DEFAULT_DISCORD_CLIENT_ID
 
@@ -251,7 +252,7 @@ class Game(GObject.Object):
                 dialogs.ErrorDialog(
                     "Runtime currently updating", "Game might not work as expected"
                 )
-        if "wine" in self.runner_name and not wine.get_system_wine_version():
+        if "wine" in self.runner_name and not wine.get_system_wine_version() and not LINUX_SYSTEM.is_flatpak:
 
             # TODO find a reference to the root window or better yet a way not
             # to have Gtk dependent code in this class.
@@ -423,7 +424,10 @@ class Game(GObject.Object):
         fps_limit = system_config.get("fps_limit") or ""
         if fps_limit:
             strangle_cmd = system.find_executable("strangle")
-            launch_arguments = [strangle_cmd, fps_limit] + launch_arguments
+            if strangle_cmd:
+                launch_arguments = [strangle_cmd, fps_limit] + launch_arguments
+            else:
+                logger.warning("libstrangle is not available on this system, FPS limiter disabled")
 
         prefix_command = system_config.get("prefix_command") or ""
         if prefix_command:
@@ -454,6 +458,7 @@ class Game(GObject.Object):
         # Env vars
         game_env = gameplay_info.get("env") or self.runner.get_env()
         env.update(game_env)
+        env["game_name"] = self.name
 
         # LD_PRELOAD
         ld_preload = gameplay_info.get("ld_preload")
@@ -468,7 +473,7 @@ class Game(GObject.Object):
                     path
                     for path in [
                         env.get("LD_PRELOAD"),
-                        "/usr/$LIB/libgamemodeauto.so",
+                        "libgamemodeauto.so",
                     ]
                     if path
                 ]
@@ -506,6 +511,7 @@ class Game(GObject.Object):
             self.prelaunch_executor = MonitoredCommand(
                 [prelaunch_command],
                 include_processes=[os.path.basename(prelaunch_command)],
+                env=self.game_runtime_config["env"],
                 cwd=self.directory,
             )
             self.prelaunch_executor.start()
@@ -572,7 +578,7 @@ class Game(GObject.Object):
 
     def prelaunch_beat(self):
         """Watch the prelaunch command"""
-        if self.prelaunch_executor.is_running:
+        if self.prelaunch_executor and self.prelaunch_executor.is_running:
             return True
         self.start_game()
         return False
@@ -632,6 +638,7 @@ class Game(GObject.Object):
             postexit_thread = MonitoredCommand(
                 [postexit_command],
                 include_processes=[os.path.basename(postexit_command)],
+                env=self.game_runtime_config["env"],
                 cwd=self.directory,
             )
             postexit_thread.start()
